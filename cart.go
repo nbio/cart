@@ -51,8 +51,8 @@ func Main() error {
 	log.SetOutput(os.Stderr)
 
 	flag.StringVar(&project, "repo", "", "github <username>/<repo>")
-	flag.IntVar(&buildNum, "build", 0, "get artifact for build #<n>, ignoring branch")
 	flag.StringVar(&branch, "branch", "master", "search builds for branch")
+	flag.IntVar(&buildNum, "build", 0, "get artifact for build #<n>, ignoring branch")
 	flag.StringVar(&circleToken, "token", "", "CircleCI auth token")
 	flag.StringVar(&outputPath, "o", "", "(optional) output file path")
 	flag.BoolVar(&verbose, "v", false, "verbose output")
