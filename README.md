@@ -15,11 +15,17 @@ Authentication uses `$CIRCLE_TOKEN` in your shell's environment or the `-token` 
 ## Get an artifact from a specific branch
 
 ``` console
-$ cart -branch feature1 username/repo path/to/artifact
+$ cart -branch feature1 path/to/artifact
 ```
 
 ## Get an artifact from a specific build number
 
 ``` console
-$ cart -build 42 username/repo path/to/artifact
+$ cart -build 42 path/to/artifact
+```
+
+## Get an artifact from a specific user/repo
+
+``` console
+$ cart -repo nbio/cart path/to/artifact
 ```

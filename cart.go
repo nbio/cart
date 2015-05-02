@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -27,16 +31,17 @@ type artifact struct {
 }
 
 var (
-	branch      string
-	buildNum    int
-	circleToken string
-	outputPath  string
-	verbose     bool
+	project         string
+	branch          string
+	buildNum        int
+	circleToken     string
+	outputPath      string
+	verbose, dryRun bool
 )
 
 func main() {
 	if err := Main(); err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error: %s", err)
 	}
 }
 
@@ -45,21 +50,26 @@ func Main() error {
 	log.SetFlags(0)
 	log.SetOutput(os.Stderr)
 
+	flag.StringVar(&project, "repo", "", "github <username>/<repo>")
 	flag.IntVar(&buildNum, "build", 0, "get artifact for build #<n>, ignoring branch")
 	flag.StringVar(&branch, "branch", "master", "search builds for branch")
 	flag.StringVar(&circleToken, "token", "", "CircleCI auth token")
 	flag.StringVar(&outputPath, "o", "", "(optional) output file path")
 	flag.BoolVar(&verbose, "v", false, "verbose output")
+	flag.BoolVar(&dryRun, "n", false, "skip artifact download")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <username>/<project> <artifact>\n\n", filepath.Base(os.Args[0]))
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <artifact>\n\n", filepath.Base(os.Args[0]))
 		flag.PrintDefaults()
 	}
 
 	flag.Parse()
 
-	project := flag.Arg(0)
-	artifactName := flag.Arg(1)
+	if project == "" {
+		project = gitProject()
+	}
+
+	artifactName := flag.Arg(0)
 	if circleToken == "" {
 		circleToken = os.Getenv("CIRCLE_TOKEN")
 	}
@@ -76,11 +86,11 @@ func Main() error {
 		return fmt.Errorf("no auth token set: use $CIRCLE_TOKEN or flag -token")
 	case buildNum > 0:
 		// Don't look for a green build.
-		log.Printf("build: %d", buildNum)
+		log.Printf("Build: %d", buildNum)
 	default:
 		u := fmt.Sprintf(buildListURL, project, branch, circleToken)
 		if verbose {
-			log.Println("build list:", u)
+			log.Println("Build list:", u)
 		}
 		req, err := http.NewRequest("GET", u, nil)
 		if err != nil {
@@ -100,13 +110,13 @@ func Main() error {
 			return fmt.Errorf("No builds found for branch: %s", branch)
 		}
 		buildNum = builds[0].BuildNum
-		log.Printf("build: %d branch: %s", buildNum, branch)
+		log.Printf("Build: %d branch: %s", buildNum, branch)
 	}
 
 	// Get artifact from buildNum
 	u := fmt.Sprintf(artifactsURL, project, buildNum, circleToken)
 	if verbose {
-		log.Println("artifact list:", u)
+		log.Println("Artifact list:", u)
 	}
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
@@ -144,16 +154,20 @@ func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, err
 			q.Add("circle-token", circleToken)
 			u.RawQuery = q.Encode()
 			if verbose {
-				log.Println("artifact URL:", u.String())
+				log.Println("Artifact URL:", u.String())
 			}
 			log.Printf("Downloading %s...", name)
+			if dryRun {
+				log.Println("dry run: skipped download")
+				os.Exit(0)
+			}
 			res, err := http.Get(u.String())
 			if err != nil {
 				return 0, err
 			}
 			defer res.Body.Close()
 			if res.StatusCode != 200 {
-				return 0, fmt.Errorf("http: remote server responded %s", res.Status)
+				return 0, fmt.Errorf("http: remote server responded %s (check http://status.circleci.com)", res.Status)
 			}
 			f, err := os.Create(outputPath)
 			if err != nil {
@@ -163,4 +177,23 @@ func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, err
 		}
 	}
 	return 0, fmt.Errorf("Unable to find artifact: %s", name)
+}
+
+var ghURL = regexp.MustCompile(`github\.com/([^\s]+)`)
+
+func gitProject() string {
+	out, err := exec.Command("git", "remote", "-v").Output()
+	if err != nil {
+		return ""
+	}
+	s := bufio.NewScanner(bytes.NewBuffer(out))
+	for s.Scan() {
+		if bytes.Contains(s.Bytes(), []byte("origin")) {
+			remote := ghURL.FindStringSubmatch(s.Text())
+			if len(remote) > 1 {
+				return strings.Replace(remote[1], ".git", "", 1)
+			}
+		}
+	}
+	return ""
 }
