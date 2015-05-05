@@ -145,36 +145,40 @@ func Main() error {
 
 func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, error) {
 	for _, a := range artifacts {
-		if strings.HasSuffix(a.URL, name) {
-			u, err := url.Parse(a.URL)
-			if err != nil {
-				return 0, err
-			}
-			q := u.Query()
-			q.Add("circle-token", circleToken)
-			u.RawQuery = q.Encode()
-			if verbose {
-				log.Println("Artifact URL:", u.String())
-			}
-			log.Printf("Downloading %s...", name)
-			if dryRun {
-				log.Println("dry run: skipped download")
-				os.Exit(0)
-			}
-			res, err := http.Get(u.String())
-			if err != nil {
-				return 0, err
-			}
-			defer res.Body.Close()
-			if res.StatusCode != 200 {
-				return 0, fmt.Errorf("http: remote server responded %s (check http://status.circleci.com)", res.Status)
-			}
-			f, err := os.Create(outputPath)
-			if err != nil {
-				return 0, err
-			}
-			return io.Copy(f, res.Body)
+		if verbose {
+			log.Println("Artifact URL:", a.URL)
 		}
+		if !strings.HasSuffix(a.URL, name) {
+			continue
+		}
+		u, err := url.Parse(a.URL)
+		if err != nil {
+			return 0, err
+		}
+		q := u.Query()
+		q.Add("circle-token", circleToken)
+		u.RawQuery = q.Encode()
+		if verbose {
+			log.Println("Artifact found:", name)
+		}
+		log.Printf("Downloading %s...", name)
+		if dryRun {
+			log.Println("dry run: skipped download")
+			os.Exit(0)
+		}
+		res, err := http.Get(u.String())
+		if err != nil {
+			return 0, err
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			return 0, fmt.Errorf("http: remote server responded %s (check http://status.circleci.com)", res.Status)
+		}
+		f, err := os.Create(outputPath)
+		if err != nil {
+			return 0, err
+		}
+		return io.Copy(f, res.Body)
 	}
 	return 0, fmt.Errorf("Unable to find artifact: %s", name)
 }
