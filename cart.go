@@ -107,7 +107,7 @@ func Main() error {
 			return err
 		}
 		if len(builds) == 0 {
-			return fmt.Errorf("No builds found for branch: %s", branch)
+			return fmt.Errorf("no builds found for branch: %s", branch)
 		}
 		buildNum = builds[0].BuildNum
 		log.Printf("Build: %d branch: %s", buildNum, branch)
@@ -163,7 +163,7 @@ func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, err
 		}
 		log.Printf("Downloading %s...", name)
 		if dryRun {
-			log.Println("dry run: skipped download")
+			log.Println("Dry run: skipped download")
 			os.Exit(0)
 		}
 		res, err := http.Get(u.String())
@@ -180,7 +180,7 @@ func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, err
 		}
 		return io.Copy(f, res.Body)
 	}
-	return 0, fmt.Errorf("Unable to find artifact: %s", name)
+	return 0, fmt.Errorf("unable to find artifact: %s", name)
 }
 
 var ghURL = regexp.MustCompile(`github\.com/([^\s]+)`)
