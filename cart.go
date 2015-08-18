@@ -23,7 +23,8 @@ const (
 )
 
 type build struct {
-	BuildNum int `json:"build_num"`
+	BuildNum int    `json:"build_num"`
+	Revision string `json:"vcs_revision"`
 }
 
 type artifact struct {
@@ -50,11 +51,11 @@ func Main() error {
 	log.SetFlags(0)
 	log.SetOutput(os.Stderr)
 
-	flag.StringVar(&project, "repo", "", "github <username>/<repo>")
-	flag.StringVar(&branch, "branch", "master", "search builds for branch")
-	flag.IntVar(&buildNum, "build", 0, "get artifact for build #<n>, ignoring branch")
+	flag.StringVar(&project, "repo", "", "github `username/repo`")
+	flag.StringVar(&branch, "branch", "master", "search builds for branch `name`")
+	flag.IntVar(&buildNum, "build", 0, "get artifact for build number, ignoring branch")
 	flag.StringVar(&circleToken, "token", "", "CircleCI auth token")
-	flag.StringVar(&outputPath, "o", "", "(optional) output file path")
+	flag.StringVar(&outputPath, "o", "", "output file `path`")
 	flag.BoolVar(&verbose, "v", false, "verbose output")
 	flag.BoolVar(&dryRun, "n", false, "skip artifact download")
 
@@ -109,8 +110,9 @@ func Main() error {
 		if len(builds) == 0 {
 			return fmt.Errorf("no builds found for branch: %s", branch)
 		}
-		buildNum = builds[0].BuildNum
-		log.Printf("Build: %d branch: %s", buildNum, branch)
+		build := builds[0]
+		buildNum = build.BuildNum
+		log.Printf("build: %d branch: %s rev: %s", buildNum, branch, build.Revision[:8])
 	}
 
 	// Get artifact from buildNum
@@ -161,11 +163,11 @@ func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, err
 		if verbose {
 			log.Println("Artifact found:", name)
 		}
-		log.Printf("Downloading %s...", name)
 		if dryRun {
 			log.Println("Dry run: skipped download")
 			os.Exit(0)
 		}
+		log.Printf("Downloading %s...", name)
 		res, err := http.Get(u.String())
 		if err != nil {
 			return 0, err
