@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -67,7 +65,11 @@ func Main() error {
 	flag.Parse()
 
 	if project == "" {
-		project = gitProject()
+		out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+		if err != nil {
+			return fmt.Errorf("exec git: %s", err)
+		}
+		project = gitProject(string(out))
 	}
 
 	artifactName := flag.Arg(0)
@@ -185,21 +187,12 @@ func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, err
 	return 0, fmt.Errorf("unable to find artifact: %s", name)
 }
 
-var ghURL = regexp.MustCompile(`github\.com/([^\s]+)`)
+var ghURL = regexp.MustCompile(`github\.com(?:/|:)(\w+/\w+)`)
 
-func gitProject() string {
-	out, err := exec.Command("git", "remote", "-v").Output()
-	if err != nil {
-		return ""
-	}
-	s := bufio.NewScanner(bytes.NewBuffer(out))
-	for s.Scan() {
-		if bytes.Contains(s.Bytes(), []byte("origin")) {
-			remote := ghURL.FindStringSubmatch(s.Text())
-			if len(remote) > 1 {
-				return strings.Replace(remote[1], ".git", "", 1)
-			}
-		}
+func gitProject(url string) string {
+	remote := ghURL.FindStringSubmatch(url)
+	if len(remote) > 1 {
+		return strings.Replace(remote[1], ".git", "", 1)
 	}
 	return ""
 }
