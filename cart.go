@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -39,14 +40,7 @@ var (
 )
 
 func main() {
-	if err := Main(); err != nil {
-		log.Fatalf("Error: %s", err)
-	}
-}
-
-// Main allows deferred functions to fire before exiting.
-func Main() error {
-	log.SetFlags(0)
+	log.SetFlags(log.Lshortfile)
 	log.SetOutput(os.Stderr)
 
 	flag.StringVar(&project, "repo", "", "github `username/repo`")
@@ -67,7 +61,7 @@ func Main() error {
 	if project == "" {
 		out, err := exec.Command("git", "remote", "get-url", "origin").Output()
 		if err != nil {
-			return fmt.Errorf("exec git: %s", err)
+			log.Fatalf("exec git: %s", err)
 		}
 		project = gitProject(string(out))
 	}
@@ -80,77 +74,80 @@ func Main() error {
 	switch {
 	case project == "":
 		flag.Usage()
-		return fmt.Errorf("no <username>/<project> provided")
+		log.Fatal("no <username>/<project> provided")
 	case artifactName == "":
 		flag.Usage()
-		return fmt.Errorf("no <artifact> provided")
+		log.Fatal("no <artifact> provided")
 	case circleToken == "":
 		flag.Usage()
-		return fmt.Errorf("no auth token set: use $CIRCLE_TOKEN or flag -token")
+		log.Fatal("no auth token set: use $CIRCLE_TOKEN or flag -token")
 	case buildNum > 0:
 		// Don't look for a green build.
-		log.Printf("Build: %d", buildNum)
+		fmt.Printf("Build: %d", buildNum)
 	default:
 		u := fmt.Sprintf(buildListURL, project, branch, circleToken)
 		if verbose {
-			log.Println("Build list:", u)
+			fmt.Println("Build list:", u)
 		}
 		req, err := http.NewRequest("GET", u, nil)
 		if err != nil {
-			return err
+			log.Fatal(err)
 		}
 		req.Header.Set("Accept", "application/json")
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {
-			return err
+			log.Fatal(err)
 		}
 		defer res.Body.Close()
+		body := new(bytes.Buffer)
+		if _, err := io.Copy(body, res.Body); err != nil {
+			log.Fatal(err)
+		}
 		var builds []build
-		if err := json.NewDecoder(res.Body).Decode(&builds); err != nil {
-			return err
+		if err := json.Unmarshal(body.Bytes(), &builds); err != nil {
+			log.Fatalf("%s: %s", err, body.String())
 		}
 		if len(builds) == 0 {
-			return fmt.Errorf("no builds found for branch: %s", branch)
+			log.Fatalf("no builds found for branch: %s", branch)
 		}
 		build := builds[0]
 		buildNum = build.BuildNum
-		log.Printf("build: %d branch: %s rev: %s", buildNum, branch, build.Revision[:8])
+		fmt.Printf("build: %d branch: %s rev: %s", buildNum, branch, build.Revision[:8])
 	}
 
 	// Get artifact from buildNum
 	u := fmt.Sprintf(artifactsURL, project, buildNum, circleToken)
 	if verbose {
-		log.Println("Artifact list:", u)
+		fmt.Println("Artifact list:", u)
 	}
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 	req.Header.Set("Accept", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 	defer res.Body.Close()
 	var artifacts []artifact
 	if err := json.NewDecoder(res.Body).Decode(&artifacts); err != nil {
-		return err
+		log.Fatal(err)
 	}
 	if outputPath == "" {
 		outputPath = filepath.Base(artifactName)
 	}
 	n, err := downloadArtifact(artifacts, artifactName, outputPath)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
-	log.Printf("Wrote %s (%d bytes) to %s", artifactName, n, outputPath)
-	return nil
+	fmt.Printf("Wrote %s (%d bytes) to %s", artifactName, n, outputPath)
 }
 
 func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, error) {
 	for _, a := range artifacts {
 		if verbose {
-			log.Println("Artifact URL:", a.URL)
+			fmt.Println("Artifact URL:", a.URL)
 		}
 		if !strings.HasSuffix(a.URL, name) {
 			continue
@@ -163,13 +160,13 @@ func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, err
 		q.Add("circle-token", circleToken)
 		u.RawQuery = q.Encode()
 		if verbose {
-			log.Println("Artifact found:", name)
+			fmt.Println("Artifact found:", name)
 		}
 		if dryRun {
-			log.Println("Dry run: skipped download")
+			fmt.Println("Dry run: skipped download")
 			os.Exit(0)
 		}
-		log.Printf("Downloading %s...", name)
+		fmt.Printf("Downloading %s...", name)
 		res, err := http.Get(u.String())
 		if err != nil {
 			return 0, err
