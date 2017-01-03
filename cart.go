@@ -83,7 +83,7 @@ func main() {
 		log.Fatal("no auth token set: use $CIRCLE_TOKEN or flag -token")
 	case buildNum > 0:
 		// Don't look for a green build.
-		fmt.Printf("Build: %d", buildNum)
+		fmt.Printf("Build: %d\n", buildNum)
 	default:
 		u := fmt.Sprintf(buildListURL, project, branch, circleToken)
 		if verbose {
@@ -112,7 +112,7 @@ func main() {
 		}
 		build := builds[0]
 		buildNum = build.BuildNum
-		fmt.Printf("build: %d branch: %s rev: %s", buildNum, branch, build.Revision[:8])
+		fmt.Printf("build: %d branch: %s rev: %s\n", buildNum, branch, build.Revision[:8])
 	}
 
 	// Get artifact from buildNum
@@ -141,7 +141,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("Wrote %s (%d bytes) to %s", artifactName, n, outputPath)
+	fmt.Printf("Wrote %s (%d bytes) to %s\n", artifactName, n, outputPath)
 }
 
 func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, error) {
@@ -166,7 +166,7 @@ func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, err
 			fmt.Println("Dry run: skipped download")
 			os.Exit(0)
 		}
-		fmt.Printf("Downloading %s...", name)
+		fmt.Printf("Downloading %s...\n", name)
 		res, err := http.Get(u.String())
 		if err != nil {
 			return 0, err
