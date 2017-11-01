@@ -57,9 +57,8 @@ func main() {
 	flag.StringVar(&project, "repo", "", "github `username/repo`")
 	flag.StringVar(&branch, "branch", "master", "search builds for branch `name`")
 	flag.IntVar(&buildNum, "build", 0, "get artifact for build number, ignoring branch")
-	flag.StringVar(&workflowArtifactBuild, "workflow-artifact-build", "",
-		"if branch build was workflow, look for this name build to find the artifacts")
-	flag.IntVar(&workflowDepth, "workflow-depth", 2, "how far back to look for workflows")
+	flag.StringVar(&workflowArtifactBuild, "workflow-artifact-build", "", "if using a workflow, look for artifacts under build: `name`")
+	flag.IntVar(&workflowDepth, "workflow-depth", 2, "how many workflow builds to check")
 	flag.StringVar(&circleToken, "token", "", "CircleCI auth token")
 	flag.StringVar(&outputPath, "o", "", "output file `path`")
 	flag.BoolVar(&verbose, "v", false, "verbose output")
