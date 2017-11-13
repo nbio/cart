@@ -20,6 +20,9 @@ const (
 	// The limit in this URL needs to be at least as long as the number of builds in a workflow
 	buildListURL = "https://circleci.com/api/v1/project/%s/tree/%s?limit=%d&filter=successful&circle-token=%s"
 	artifactsURL = "https://circleci.com/api/v1/project/%s/%d/artifacts?circle-token=%s"
+
+	// We need this to be >= 2, but only 2 means that no builds can interleave with ours in CircleCI.
+	defaultWorkflowDepth = 5
 )
 
 type workflow struct {
@@ -58,7 +61,7 @@ func main() {
 	flag.StringVar(&branch, "branch", "master", "search builds for branch `name`")
 	flag.IntVar(&buildNum, "build", 0, "get artifact for build number, ignoring branch")
 	flag.StringVar(&workflowArtifactBuild, "workflow-artifact-build", "", "if using a workflow, look for artifacts under build: `name`")
-	flag.IntVar(&workflowDepth, "workflow-depth", 2, "how many workflow builds to check")
+	flag.IntVar(&workflowDepth, "workflow-depth", defaultWorkflowDepth, "how many workflow builds to check")
 	flag.StringVar(&circleToken, "token", "", "CircleCI auth token")
 	flag.StringVar(&outputPath, "o", "", "output file `path`")
 	flag.BoolVar(&verbose, "v", false, "verbose output")
