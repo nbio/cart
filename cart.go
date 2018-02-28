@@ -144,7 +144,7 @@ func main() {
 	// continue taking the confusingly named option, but map it to the fixed variable.  Similarly for
 	// how the presence of multiple workflows means "workflow-depth" was now a misnomer, and "retrieve-count"
 	// is more accurate.
-	flag.StringVar(&filter.jobname, "workflow-artifact-build", "", "(deprecated alias for -workflow-jobname)")
+	flag.StringVar(&filter.jobname, "workflow-artifact-build", "", "(deprecated alias for -job)")
 	flag.IntVar(&retrieveBuildsCount, "workflow-depth", defaultRetrieveCount, "(deprecated alias for -search-depth)")
 	// DELETE AFTER 2018-04-01 }}}
 
