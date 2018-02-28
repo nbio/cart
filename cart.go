@@ -13,59 +13,140 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 const (
-	// The limit in this URL needs to be at least as long as the number of builds in a workflow
-	buildListURL = "https://circleci.com/api/v1/project/%s/tree/%s?limit=%d&filter=successful&circle-token=%s"
-	artifactsURL = "https://circleci.com/api/v1/project/%s/%d/artifacts?circle-token=%s"
+	// API v1.1 : <https://circleci.com/docs/api/v1-reference/>
+	// but beware that the summary is missing some method/URL pairs which are
+	// described further down in the page.
 
-	// We need this to be >= 2, but only 2 means that no builds can interleave with ours in CircleCI.
-	defaultWorkflowDepth = 5
+	buildListURL = "https://circleci.com/api/v1.1/project/github/${project}/tree/${branch}?limit=${retrieve_count}&filter=successful&circle-token=${circle_token}"
+	artifactsURL = "https://circleci.com/api/v1.1/project/github/${project}/${build_num}/artifacts?circle-token=${circle_token}"
+
+	// We need to account for multiple workflows, and multiple builds within workflows
+	defaultRetrieveCount = 10
 )
 
 type workflow struct {
 	JobName      string `json:"job_name"`
-	JobId        string `json:"job_id"`
+	JobID        string `json:"job_id"`
 	WorkflowName string `json:"workflow_name"`
-	WorkflowId   string `json:"workflow_id"`
+	WorkflowID   string `json:"workflow_id"`
 }
 
 type build struct {
 	BuildNum  int       `json:"build_num"`
 	Revision  string    `json:"vcs_revision"`
 	Workflows *workflow `json:"workflows"` // plural name but singleton struct
+
+	// We want to skip bad builds, and perhaps print the others so that if
+	// there's a mismatch from expectations, folks might notice.
+	Status   string `json:"status"`
+	Subject  string `json:"subject"`
+	StopTime string `json:"stop_time"`
 }
 
 type artifact struct {
 	URL string `json:"url"`
 }
 
+// FilterSet is the collection of attributes upon which we filter the results
+// from Circle CI (or provide in URL to pre-filter).
+type FilterSet struct {
+	branch    string
+	workflow  string
+	jobname   string
+	anyFlowID bool
+}
+
+// Expander is used to take strings containing ${var} and interpolate them,
+// so that we don't have URLs which have %s/%s/%s and cross-referencing across
+// places to figure out which those fields are.
+type Expander map[string]string
+
+// Get is just a map lookup which panics, as a function for use with os.Expand
+func (e Expander) Get(key string) string {
+	if val, ok := e[key]; ok {
+		return val
+	}
+	// There is no recovery, we don't want to pass a bad URL out, we're
+	// a client tool and we'll need to fix the hardcoded template strings.
+	panic("bad key " + key)
+}
+
+// Expand converts "${foo}/${bar}" into "football/goal".
+// It also handles some $foo without parens, but we avoid using that.
+func (e *Expander) Expand(src string) string {
+	return os.Expand(src, e.Get)
+}
+
 var (
-	project               string
-	branch                string
-	buildNum              int
-	circleToken           string
-	outputPath            string
-	workflowArtifactBuild string
-	workflowDepth         int
-	verbose, dryRun       bool
+	circleToken     string
+	filter          FilterSet
+	verbose, dryRun bool
 )
 
 func main() {
+	var (
+		project             string
+		buildNum            int
+		outputPath          string
+		retrieveBuildsCount int
+	)
+
 	log.SetFlags(log.Lshortfile)
 	log.SetOutput(os.Stderr)
 
-	flag.StringVar(&project, "repo", "", "github `username/repo`")
-	flag.StringVar(&branch, "branch", "master", "search builds for branch `name`")
-	flag.IntVar(&buildNum, "build", 0, "get artifact for build number, ignoring branch")
-	flag.StringVar(&workflowArtifactBuild, "workflow-artifact-build", "", "if using a workflow, look for artifacts under build: `name`")
-	flag.IntVar(&workflowDepth, "workflow-depth", defaultWorkflowDepth, "how many workflow builds to check")
 	flag.StringVar(&circleToken, "token", "", "CircleCI auth token")
 	flag.StringVar(&outputPath, "o", "", "output file `path`")
 	flag.BoolVar(&verbose, "v", false, "verbose output")
-	flag.BoolVar(&dryRun, "n", false, "skip artifact download")
+	flag.BoolVar(&dryRun, "dry-run", false, "skip artifact download")
+	flag.BoolVar(&dryRun, "n", false, "(short for -dry-run)")
+
+	flag.StringVar(&project, "repo", "", "github `username/repo`")
+	flag.IntVar(&buildNum, "build", 0, "get artifact for build number, ignoring branch")
+	flag.StringVar(&filter.branch, "branch", "master", "search builds for branch `name`")
+
+	// Workflows:
+	// If there are multiple workflows, then the latest "build" is perhaps unrelated to building,
+	// not even a later step in a workflow where an earlier step did build.  Eg, we have
+	// stuff to automate dependencies checking, scheduled from cron.
+	// So to retrieve an artifact, we want to only consider specific workflow names.
+	// However, those are config items in `.circleci/config.yml` and we should avoid hardcoding
+	// such arbitrary choices across more than one repo, so our default for now is empty,
+	// thus not filtered.
+	//
+	// Within a workflow, the build might not be the last step in the flow; it usually won't be.
+	// Later steps might be "deploy", "stash image somewhere", etc.
+	// So we need to step back from the last step within a workflow until we find the specific
+	// step we're told.
+	//
+	// Eg, for one project, at this time, we use "commit_workflow" as the workflow to search for
+	// and "build" as the job within that workflow.
+	//
+	// By default, we want the build found for a workflow to be part of the
+	// same workflow invocation as the latest build seen for that workflow, so
+	// that we don't skip back to an older generation. If instead you just want
+	// "the latest build of that name, in any workflow matching this name",
+	// then use -ignore-later-workflows.
+
+	flag.StringVar(&filter.workflow, "workflow", "", "only consider builds which are part of this workflow")
+	flag.StringVar(&filter.workflow, "w", "", "(short for -workflow)")
+	flag.StringVar(&filter.jobname, "job", "", "look within workflow for artifacts from this build/step/job")
+	flag.StringVar(&filter.jobname, "j", "", "(short for -job)")
+	flag.IntVar(&retrieveBuildsCount, "search-depth", defaultRetrieveCount, "how far back to search in build history")
+	flag.BoolVar(&filter.anyFlowID, "ignore-later-workflows", false, "latest build of any matching workflow will do")
+
+	// DELETE AFTER 2018-04-01 {{{
+	// when the workflow-jobname functionality was first added, I (pdp) named it badly; for compatibility,
+	// continue taking the confusingly named option, but map it to the fixed variable.  Similarly for
+	// how the presence of multiple workflows means "workflow-depth" was now a misnomer, and "retrieve-count"
+	// is more accurate.
+	flag.StringVar(&filter.jobname, "workflow-artifact-build", "", "(deprecated alias for -workflow-jobname)")
+	flag.IntVar(&retrieveBuildsCount, "workflow-depth", defaultRetrieveCount, "(deprecated alias for -search-depth)")
+	// DELETE AFTER 2018-04-01 }}}
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <artifact>\n\n", filepath.Base(os.Args[0]))
@@ -73,6 +154,11 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if len(flag.Args()) != 1 {
+		flag.Usage()
+		log.Fatal("stray unparsed parameters left in command-line")
+	}
 
 	if project == "" {
 		out, err := exec.Command("git", "remote", "get-url", "origin").Output()
@@ -87,28 +173,46 @@ func main() {
 		circleToken = os.Getenv("CIRCLE_TOKEN")
 	}
 
+	// for URL expansion with sane named parameters, and put in everything
+	// we might want too, including filters, in case there are better
+	// URLs we can switch to in future.
+	expansions := Expander{
+		"project":        project,
+		"artifact":       artifactName,
+		"retrieve_count": strconv.Itoa(retrieveBuildsCount),
+		"build_num":      strconv.Itoa(buildNum),
+		"circle_token":   circleToken,
+		"branch":         filter.branch,
+		"workflow":       filter.workflow,
+		"jobname":        filter.jobname,
+	}
+
 	switch {
 	case project == "":
 		flag.Usage()
 		log.Fatal("no <username>/<project> provided")
+	case filter.branch == "":
+		flag.Usage()
+		log.Fatal("no <branch> provided")
 	case artifactName == "":
 		flag.Usage()
 		log.Fatal("no <artifact> provided")
 	case circleToken == "":
 		flag.Usage()
 		log.Fatal("no auth token set: use $CIRCLE_TOKEN or flag -token")
-	case workflowDepth < 1:
+	case retrieveBuildsCount < 1:
 		flag.Usage()
 		log.Fatal("workflow depth must be a positive (smallish) integer")
 	case buildNum > 0:
 		// Don't look for a green build.
 		fmt.Printf("Build: %d\n", buildNum)
 	default:
-		buildNum = circleFindBuild(project, branch, circleToken)
+		buildNum = circleFindBuild(expansions, filter)
+		expansions["build_num"] = strconv.Itoa(buildNum)
 	}
 
 	// Get artifact from buildNum
-	u := fmt.Sprintf(artifactsURL, project, buildNum, circleToken)
+	u := expansions.Expand(artifactsURL)
 	if verbose {
 		fmt.Println("Artifact list:", u)
 	}
@@ -136,8 +240,8 @@ func main() {
 	fmt.Printf("Wrote %s (%d bytes) to %s\n", artifactName, n, outputPath)
 }
 
-func circleFindBuild(project, branch, circleToken string) (buildNum int) {
-	u := fmt.Sprintf(buildListURL, project, branch, workflowDepth, circleToken)
+func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
+	u := expansions.Expand(buildListURL)
 	if verbose {
 		fmt.Println("Build list:", u)
 	}
@@ -155,45 +259,90 @@ func circleFindBuild(project, branch, circleToken string) (buildNum int) {
 	if _, err := io.Copy(body, res.Body); err != nil {
 		log.Fatal(err)
 	}
-	var (
-		builds []build
-		build  build
-	)
+
+	var builds []build
 	if err := json.Unmarshal(body.Bytes(), &builds); err != nil {
 		log.Fatalf("%s: %s", err, body.String())
 	}
 	if len(builds) == 0 {
-		log.Fatalf("no builds found for branch: %s", branch)
+		log.Fatalf("no builds found for branch: %s", filter.branch)
 	}
-	if workflowArtifactBuild != "" && builds[0].Workflows != nil && builds[0].Workflows.JobName != workflowArtifactBuild {
-		fmt.Printf("build: branch %q build %d is %q part of workflow %q, searching for build %q\n",
-			branch, builds[0].BuildNum, builds[0].Workflows.JobName,
-			builds[0].Workflows.WorkflowName, workflowArtifactBuild)
-		if len(builds) < 2 {
-			log.Fatalf("build: failed to find a build %q in workflow %q branch %q",
-				workflowArtifactBuild, builds[0].Workflows.WorkflowName, branch)
+
+	// We _want_ to find the last successful workflow; as of APIv1.1 there's
+	// nothing to filter directly by workflow, nor to tell if a workflow has
+	// completed successfully, to know if we're grabbing something which later
+	// failed, etc.
+	//
+	// So we just look for the last green build within a workflow and rely upon
+	// the build we want being either that one, or earlier, with no prep steps
+	// pre-build.  Unless the caller told us they don't care about matching
+	// workflow ID to the latest workflow for which we see any builds.
+
+	foundBuild := -1
+	onlyWorkflowID := ""
+	for i := 0; i < len(builds); i++ {
+		headOfWorkflow := false
+		if builds[i].Workflows == nil && (filter.workflow != "" || filter.jobname != "") {
+			// fmt.Printf("skipping %d, no workflow: %+v\n", i, builds[i])
+			// -- these happen, they show in the UI, I wonder if it's a manual trigger?
+			continue
 		}
-		for i := 1; i < len(builds); i++ {
-			if builds[i].Workflows != nil &&
-				builds[i].Workflows.WorkflowId == builds[0].Workflows.WorkflowId &&
-				builds[i].Workflows.JobName == workflowArtifactBuild {
-				fmt.Printf("build: workflow %q branch %q found build %q at offset %d\n",
-					builds[0].Workflows.WorkflowName, branch, workflowArtifactBuild, i)
-				build = builds[i]
-				buildNum = build.BuildNum
-				break
+		if builds[i].Status != "success" {
+			continue
+		}
+		if onlyWorkflowID != "" && builds[i].Workflows.WorkflowID != onlyWorkflowID {
+			continue
+		}
+		if filter.workflow != "" && builds[i].Workflows.WorkflowName != filter.workflow {
+			continue
+		}
+		if onlyWorkflowID == "" && filter.workflow != "" && !filter.anyFlowID {
+			onlyWorkflowID = builds[i].Workflows.WorkflowID
+			headOfWorkflow = true
+		}
+		if filter.jobname != "" && builds[i].Workflows.JobName != filter.jobname {
+			if headOfWorkflow {
+				fmt.Printf("build: branch %q build %d is a %q, part of workflow %q, searching for build %q\n",
+					filter.branch, builds[i].BuildNum,
+					builds[i].Workflows.JobName, builds[0].Workflows.WorkflowName,
+					filter.jobname)
 			}
+			continue
 		}
-		if buildNum == 0 {
-			log.Fatalf("build: failed to find a suitable build for workflow %q (%q)",
-				builds[0].Workflows.WorkflowName, builds[0].Workflows.WorkflowId)
+		if builds[i].Workflows == nil {
+			// must mean no filters, so i == 0
+			fmt.Printf("build: workflow-less on branch %q found a build at offset %d\n",
+				filter.branch, i)
+		} else {
+			fmt.Printf("build: workflow %q branch %q found build %q at offset %d\n",
+				builds[i].Workflows.WorkflowName, filter.branch, builds[i].Workflows.JobName, i)
 		}
-	} else {
-		build = builds[0]
-		buildNum = build.BuildNum
+
+		foundBuild = i
+		break
 	}
-	fmt.Printf("build: %d branch: %s rev: %s\n", buildNum, branch, build.Revision[:8])
-	return
+
+	if foundBuild < 0 {
+		labelFlow := filter.workflow
+		labelName := filter.jobname
+		if labelFlow == "" {
+			labelFlow = "*"
+		}
+		if labelName == "" {
+			labelName = "*"
+		}
+		log.Fatalf("build: failed to find a build matching workflow=%q jobname=%q in branch %q",
+			labelFlow, labelName, filter.branch)
+	}
+
+	if verbose {
+		fmt.Printf("\nBuild Subject  : %s\nBuild Finished : %s\n",
+			builds[foundBuild].Subject, builds[foundBuild].StopTime)
+	}
+
+	fmt.Printf("build: %d branch: %s rev: %s\n",
+		builds[foundBuild].BuildNum, filter.branch, builds[foundBuild].Revision[:8])
+	return builds[foundBuild].BuildNum
 }
 
 func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, error) {
