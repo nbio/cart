@@ -102,7 +102,8 @@ func main() {
 	flag.StringVar(&circleToken, "token", "", "CircleCI auth token")
 	flag.StringVar(&outputPath, "o", "", "output file `path`")
 	flag.BoolVar(&verbose, "v", false, "verbose output")
-	flag.BoolVar(&dryRun, "n", false, "skip artifact download")
+	flag.BoolVar(&dryRun, "dry-run", false, "skip artifact download")
+	flag.BoolVar(&dryRun, "n", false, "(short for -dry-run)")
 
 	flag.StringVar(&project, "repo", "", "github `username/repo`")
 	flag.IntVar(&buildNum, "build", 0, "get artifact for build number, ignoring branch")
@@ -113,7 +114,7 @@ func main() {
 	// not even a later step in a workflow where an earlier step did build.  Eg, we have
 	// stuff to automate dependencies checking, scheduled from cron.
 	// So to retrieve an artifact, we want to only consider specific workflow names.
-	// HOWEVER: those are config items in `.circleci/config.yml` and we should avoid hardcoding
+	// However, those are config items in `.circleci/config.yml` and we should avoid hardcoding
 	// such arbitrary choices across more than one repo, so our default for now is empty,
 	// thus not filtered.
 	//
@@ -124,19 +125,28 @@ func main() {
 	//
 	// Eg, for one project, at this time, we use "commit_workflow" as the workflow to search for
 	// and "build" as the job within that workflow.
+	//
+	// By default, we want the build found for a workflow to be part of the
+	// same workflow invocation as the latest build seen for that workflow, so
+	// that we don't skip back to an older generation. If instead you just want
+	// "the latest build of that name, in any workflow matching this name",
+	// then use -ignore-later-workflows.
 
 	flag.StringVar(&filter.workflow, "workflow", "", "only consider builds which are part of this workflow")
-	flag.StringVar(&filter.jobname, "jobname", "", "look within workflow for artifacts from this job's name")
-	flag.IntVar(&retrieveBuildsCount, "retrieve-count", defaultRetrieveCount, "how many builds to retrieve")
-	// This description is too long; how to make it shorter?
-	flag.BoolVar(&filter.anyFlowID, "ignore-later-workflows", false, "get the last successful workflow/job build, even if of a previous flow-id than the latest we see for that workflow")
+	flag.StringVar(&filter.workflow, "w", "", "(short for -workflow)")
+	flag.StringVar(&filter.jobname, "job", "", "look within workflow for artifacts from this build/step/job")
+	flag.StringVar(&filter.jobname, "j", "", "(short for -job)")
+	flag.IntVar(&retrieveBuildsCount, "search-depth", defaultRetrieveCount, "how far back to search in build history")
+	flag.BoolVar(&filter.anyFlowID, "ignore-later-workflows", false, "latest build of any matching workflow will do")
 
+	// DELETE AFTER 2018-04-01 {{{
 	// when the workflow-jobname functionality was first added, I (pdp) named it badly; for compatibility,
 	// continue taking the confusingly named option, but map it to the fixed variable.  Similarly for
 	// how the presence of multiple workflows means "workflow-depth" was now a misnomer, and "retrieve-count"
 	// is more accurate.
-	flag.StringVar(&filter.jobname, "workflow-artifact-build", "", "(alias for -workflow-jobname)")
-	flag.IntVar(&retrieveBuildsCount, "workflow-depth", defaultRetrieveCount, "(alias for -retrieve-count)")
+	flag.StringVar(&filter.jobname, "workflow-artifact-build", "", "(deprecated alias for -workflow-jobname)")
+	flag.IntVar(&retrieveBuildsCount, "workflow-depth", defaultRetrieveCount, "(deprecated alias for -search-depth)")
+	// DELETE AFTER 2018-04-01 }}}
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <artifact>\n\n", filepath.Base(os.Args[0]))
@@ -144,6 +154,11 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if len(flag.Args()) != 1 {
+		flag.Usage()
+		log.Fatal("stray unparsed parameters left in command-line")
+	}
 
 	if project == "" {
 		out, err := exec.Command("git", "remote", "get-url", "origin").Output()
