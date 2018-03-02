@@ -130,7 +130,7 @@ func main() {
 
 	flag.StringVar(&circleToken, "token", "", "CircleCI auth token")
 	flag.StringVar(&outputPath, "o", "", "output file `path`")
-	flag.BoolVar(&flagVerbose, "v", false, "verbose output")
+	flag.BoolVar(&flagVerbose, "v", false, "verbose output (env $VERBOSITY=2|3|.. to see more)")
 	flag.BoolVar(&dryRun, "dry-run", false, "skip artifact download")
 	flag.BoolVar(&dryRun, "n", false, "(short for -dry-run)")
 
@@ -171,7 +171,7 @@ func main() {
 	// DELETE AFTER 2018-04-01 {{{
 	// when the workflow-jobname functionality was first added, I (pdp) named it badly; for compatibility,
 	// continue taking the confusingly named option, but map it to the fixed variable.  Similarly for
-	// how the presence of multiple workflows means "workflow-depth" was now a misnomer, and "retrieve-count"
+	// how the presence of multiple workflows means "workflow-depth" was now a misnomer, and "search-depth"
 	// is more accurate.
 	flag.StringVar(&filter.jobname, "workflow-artifact-build", "", "(deprecated alias for -job)")
 	flag.IntVar(&retrieveBuildsCount, "workflow-depth", defaultRetrieveCount, "(deprecated alias for -search-depth)")
@@ -237,8 +237,11 @@ func main() {
 		flag.Usage()
 		log.Fatal("no <artifact> provided")
 	case circleToken == "":
-		flag.Usage()
-		log.Fatal("no auth token set: use $CIRCLE_TOKEN or flag -token")
+		// This one is common enough that showing usage obscures the actual issue,
+		// because ~everyone should be passing the value in through environ, so
+		// there's unlikely to be a problem with parameters, only with loading
+		// sensitive data into environ.  So we skip flag.Usage()
+		log.Fatal("no auth token set: use $CIRCLE_TOKEN or flag -token (try -help)")
 	case retrieveBuildsCount < 1:
 		flag.Usage()
 		log.Fatal("workflow depth must be a positive (smallish) integer")
