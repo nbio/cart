@@ -29,6 +29,9 @@ const (
 	defaultRetrieveCount = 10
 )
 
+// censorURLfields caveat: keys in the query-map are case-sensitive
+var censorURLfields = []string{"circle-token"}
+
 type workflow struct {
 	JobName      string `json:"job_name"`
 	JobID        string `json:"job_id"`
@@ -80,6 +83,13 @@ func (e Expander) Get(key string) string {
 // It also handles some $foo without parens, but we avoid using that.
 func (e *Expander) Expand(src string) string {
 	return os.Expand(src, e.Get)
+}
+
+// ExpandURL does the same as Expand but call normalize() on the result,
+// so that the output will be consistent whether censored or sent on the
+// wire.
+func (e *Expander) ExpandURL(src string) string {
+	return normalizeURL(os.Expand(src, e.Get))
 }
 
 var (
@@ -241,8 +251,8 @@ func main() {
 	}
 
 	// Get artifact from buildNum
-	u := expansions.Expand(artifactsURL)
-	verboseln("Artifact list:", u)
+	u := expansions.ExpandURL(artifactsURL)
+	verboseln("Artifact list:", censorURL(u))
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -268,8 +278,8 @@ func main() {
 }
 
 func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
-	u := expansions.Expand(buildListURL)
-	verboseln("Build list:", u)
+	u := expansions.ExpandURL(buildListURL)
+	verboseln("Build list:", censorURL(u))
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -423,4 +433,54 @@ func gitProject(url string) string {
 		return strings.Replace(remote[1], ".git", "", 1)
 	}
 	return ""
+}
+
+// We want to be able to censor a string for printing, to avoid showing
+// credentials, to make it easier to copy/paste.
+func censorURL(original string) string { return mutateURL(original, true) }
+
+// After my first look at the output and seeing the options returned, I
+// realized that they were being sorted and what we were logging was now
+// sufficiently far enough from what we were sending that it would cause debug
+// problems in future.  So, we also have a normalize approach, to keep the
+// two at least consistent.
+func normalizeURL(original string) string { return mutateURL(original, false) }
+
+func mutateURL(original string, mutate bool) string {
+	// We construct the URL from internal data, so any parse errors are coding
+	// bugs to be fixed.  This applies to original URL parse and query-string
+	// parse below.
+
+	safe, err := url.Parse(original)
+	if err != nil {
+		panic(err)
+	}
+
+	if safe.User != nil {
+		if _, hasPassword := safe.User.Password(); hasPassword && mutate {
+			safe.User = url.UserPassword(safe.User.Username(), "censored")
+		}
+	}
+	if safe.RawQuery == "" {
+		return safe.String()
+	}
+
+	values, err := url.ParseQuery(safe.RawQuery)
+	if err != nil {
+		panic(err)
+	}
+	changed := false
+	for _, censor := range censorURLfields {
+		if v := values.Get(censor); v != "" {
+			if mutate {
+				values.Set(censor, "censored")
+			}
+			changed = true
+		}
+	}
+	if changed {
+		safe.RawQuery = values.Encode()
+	}
+
+	return safe.String()
 }
