@@ -43,7 +43,7 @@ type build struct {
 
 	// We want to skip bad builds, and perhaps print the others so that if
 	// there's a mismatch from expectations, folks might notice.
-	Status   string `json:"status"`
+	Outcome  string `json:"outcome"`
 	Subject  string `json:"subject"`
 	StopTime string `json:"stop_time"`
 }
@@ -83,10 +83,28 @@ func (e *Expander) Expand(src string) string {
 }
 
 var (
-	circleToken     string
-	filter          FilterSet
-	verbose, dryRun bool
+	circleToken string
+	filter      FilterSet
+	dryRun      bool
+	verbosity   int
 )
+
+func verbosenln(level int, items ...interface{}) {
+	if level > verbosity {
+		return
+	}
+	fmt.Println(items...)
+}
+
+func verbosenf(level int, spec string, args ...interface{}) {
+	if level > verbosity {
+		return
+	}
+	fmt.Printf(spec, args...)
+}
+
+func verbosef(spec string, args ...interface{}) { verbosenf(1, spec, args...) }
+func verboseln(items ...interface{})            { verbosenln(1, items...) }
 
 func main() {
 	var (
@@ -94,6 +112,7 @@ func main() {
 		buildNum            int
 		outputPath          string
 		retrieveBuildsCount int
+		flagVerbose         bool
 	)
 
 	log.SetFlags(log.Lshortfile)
@@ -101,7 +120,7 @@ func main() {
 
 	flag.StringVar(&circleToken, "token", "", "CircleCI auth token")
 	flag.StringVar(&outputPath, "o", "", "output file `path`")
-	flag.BoolVar(&verbose, "v", false, "verbose output")
+	flag.BoolVar(&flagVerbose, "v", false, "verbose output")
 	flag.BoolVar(&dryRun, "dry-run", false, "skip artifact download")
 	flag.BoolVar(&dryRun, "n", false, "(short for -dry-run)")
 
@@ -160,6 +179,16 @@ func main() {
 		log.Fatal("stray unparsed parameters left in command-line")
 	}
 
+	if flagVerbose {
+		verbosity = 1
+		if t := os.Getenv("VERBOSITY"); t != "" {
+			var err error
+			if verbosity, err = strconv.Atoi(t); err != nil {
+				log.Fatalf("parse $VERBOSITY %q: %s", t, err)
+			}
+		}
+	}
+
 	if project == "" {
 		out, err := exec.Command("git", "remote", "get-url", "origin").Output()
 		if err != nil {
@@ -213,9 +242,7 @@ func main() {
 
 	// Get artifact from buildNum
 	u := expansions.Expand(artifactsURL)
-	if verbose {
-		fmt.Println("Artifact list:", u)
-	}
+	verboseln("Artifact list:", u)
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -242,9 +269,7 @@ func main() {
 
 func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 	u := expansions.Expand(buildListURL)
-	if verbose {
-		fmt.Println("Build list:", u)
-	}
+	verboseln("Build list:", u)
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -283,29 +308,40 @@ func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 	for i := 0; i < len(builds); i++ {
 		headOfWorkflow := false
 		if builds[i].Workflows == nil && (filter.workflow != "" || filter.jobname != "") {
-			// fmt.Printf("skipping %d, no workflow: %+v\n", i, builds[i])
+			verbosenf(2, "[%d][%d] SKIP, no workflow: %+v\n", i, builds[i].BuildNum, builds[i])
 			// -- these happen, they show in the UI, I wonder if it's a manual trigger?
 			continue
 		}
-		if builds[i].Status != "success" {
+		if builds[i].Outcome != "success" {
+			verbosenf(2, "[%d][%d] SKIP: build outcome is %q\n",
+				i, builds[i].BuildNum, builds[i].Outcome)
 			continue
 		}
 		if onlyWorkflowID != "" && builds[i].Workflows.WorkflowID != onlyWorkflowID {
+			verbosenf(3, "[%d][%d] SKIP: workflow-id %q, need latched workflow-id %q\n",
+				i, builds[i].BuildNum, builds[i].Workflows.WorkflowID, onlyWorkflowID)
 			continue
 		}
 		if filter.workflow != "" && builds[i].Workflows.WorkflowName != filter.workflow {
+			verbosenf(2, "[%d][%d] SKIP: workflow is %q, need %q\n",
+				i, builds[i].BuildNum, builds[i].Workflows.WorkflowName, filter.workflow)
 			continue
 		}
 		if onlyWorkflowID == "" && filter.workflow != "" && !filter.anyFlowID {
 			onlyWorkflowID = builds[i].Workflows.WorkflowID
+			verbosenf(2, "[%d][%d] Note: first match on workflow %q, workflow id is %q\n",
+				i, builds[i].BuildNum, filter.workflow, onlyWorkflowID)
 			headOfWorkflow = true
 		}
 		if filter.jobname != "" && builds[i].Workflows.JobName != filter.jobname {
 			if headOfWorkflow {
 				fmt.Printf("build: branch %q build %d is a %q, part of workflow %q, searching for build %q\n",
 					filter.branch, builds[i].BuildNum,
-					builds[i].Workflows.JobName, builds[0].Workflows.WorkflowName,
+					builds[i].Workflows.JobName, builds[i].Workflows.WorkflowName,
 					filter.jobname)
+			} else {
+				verbosenf(2, "[%d][%d] SKIP, has matching workflow %q, not yet right jobname (saw %q)\n",
+					i, builds[i].BuildNum, builds[i].Workflows.WorkflowName, builds[i].Workflows.JobName)
 			}
 			continue
 		}
@@ -335,10 +371,8 @@ func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 			labelFlow, labelName, filter.branch)
 	}
 
-	if verbose {
-		fmt.Printf("\nBuild Subject  : %s\nBuild Finished : %s\n",
-			builds[foundBuild].Subject, builds[foundBuild].StopTime)
-	}
+	verbosef("\nBuild Subject  : %s\nBuild Finished : %s\n",
+		builds[foundBuild].Subject, builds[foundBuild].StopTime)
 
 	fmt.Printf("build: %d branch: %s rev: %s\n",
 		builds[foundBuild].BuildNum, filter.branch, builds[foundBuild].Revision[:8])
@@ -347,9 +381,7 @@ func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 
 func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, error) {
 	for _, a := range artifacts {
-		if verbose {
-			fmt.Println("Artifact URL:", a.URL)
-		}
+		verboseln("Artifact URL:", a.URL)
 		if !strings.HasSuffix(a.URL, name) {
 			continue
 		}
@@ -360,9 +392,7 @@ func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, err
 		q := u.Query()
 		q.Add("circle-token", circleToken)
 		u.RawQuery = q.Encode()
-		if verbose {
-			fmt.Println("Artifact found:", name)
-		}
+		verboseln("Artifact found:", name)
 		if dryRun {
 			fmt.Println("Dry run: skipped download")
 			os.Exit(0)
