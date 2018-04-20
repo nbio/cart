@@ -52,7 +52,9 @@ type build struct {
 }
 
 type artifact struct {
-	URL string `json:"url"`
+	URL       string `json:"url"`
+	Path      string `json:"path"`
+	NodeIndex int    `json:"node_index"`
 }
 
 // FilterSet is the collection of attributes upon which we filter the results
@@ -123,6 +125,7 @@ func main() {
 		outputPath          string
 		retrieveBuildsCount int
 		flagVerbose         bool
+		flagListArtifacts   bool
 	)
 
 	log.SetFlags(log.Lshortfile)
@@ -133,6 +136,8 @@ func main() {
 	flag.BoolVar(&flagVerbose, "v", false, "verbose output (env $VERBOSITY=2|3|.. to see more)")
 	flag.BoolVar(&dryRun, "dry-run", false, "skip artifact download")
 	flag.BoolVar(&dryRun, "n", false, "(short for -dry-run)")
+	flag.BoolVar(&flagListArtifacts, "list-artifacts", false, "list artifacts")
+	flag.BoolVar(&flagListArtifacts, "l", false, "short for -list-artifacts")
 
 	flag.StringVar(&project, "repo", "", "github `username/repo`")
 	flag.IntVar(&buildNum, "build", 0, "get artifact for build number, ignoring branch")
@@ -168,15 +173,6 @@ func main() {
 	flag.IntVar(&retrieveBuildsCount, "search-depth", defaultRetrieveCount, "how far back to search in build history")
 	flag.BoolVar(&filter.anyFlowID, "ignore-later-workflows", false, "latest build of any matching workflow will do")
 
-	// DELETE AFTER 2018-04-01 {{{
-	// when the workflow-jobname functionality was first added, I (pdp) named it badly; for compatibility,
-	// continue taking the confusingly named option, but map it to the fixed variable.  Similarly for
-	// how the presence of multiple workflows means "workflow-depth" was now a misnomer, and "search-depth"
-	// is more accurate.
-	flag.StringVar(&filter.jobname, "workflow-artifact-build", "", "(deprecated alias for -job)")
-	flag.IntVar(&retrieveBuildsCount, "workflow-depth", defaultRetrieveCount, "(deprecated alias for -search-depth)")
-	// DELETE AFTER 2018-04-01 }}}
-
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <artifact>\n\n", filepath.Base(os.Args[0]))
 		flag.PrintDefaults()
@@ -184,7 +180,8 @@ func main() {
 
 	flag.Parse()
 
-	if len(flag.Args()) != 1 {
+	// TODO: should we support multiple downloads in one invocation?
+	if len(flag.Args()) > 1 {
 		flag.Usage()
 		log.Fatal("stray unparsed parameters left in command-line")
 	}
@@ -233,7 +230,7 @@ func main() {
 	case filter.branch == "":
 		flag.Usage()
 		log.Fatal("no <branch> provided")
-	case artifactName == "":
+	case artifactName == "" && !flagListArtifacts:
 		flag.Usage()
 		log.Fatal("no <artifact> provided")
 	case circleToken == "":
@@ -270,6 +267,17 @@ func main() {
 	if err := json.NewDecoder(res.Body).Decode(&artifacts); err != nil {
 		log.Fatal(err)
 	}
+
+	if flagListArtifacts {
+		for i := range artifacts {
+			fmt.Printf("[%d] node_index %d: path %q URL %q\n",
+				i, artifacts[i].NodeIndex, artifacts[i].Path, artifacts[i].URL)
+		}
+	}
+	if artifactName == "" {
+		return
+	}
+
 	if outputPath == "" {
 		outputPath = filepath.Base(artifactName)
 	}
