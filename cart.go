@@ -253,14 +253,15 @@ func main() {
 	u := expansions.ExpandURL(artifactsURL)
 	verboseln("Artifact list:", censorURL(u))
 	res := httpGet(u, circleToken)
+
 	defer res.Body.Close()
-	body, readErr := io.ReadAll(res.Body)
-	if readErr != nil {
-		log.Fatal(readErr)
+	body := new(bytes.Buffer)
+	if _, err := io.Copy(body, res.Body); err != nil {
+		log.Fatal(err)
 	}
 	var items map[string][]artifact
-	if err := json.Unmarshal(body, &items); err != nil {
-		log.Fatal(err)
+	if err := json.Unmarshal(body.Bytes(), &items); err != nil {
+		log.Fatalf("%s: %s", err, body.String())
 	}
 	artifacts := items["items"]
 
