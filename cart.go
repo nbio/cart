@@ -251,7 +251,11 @@ func main() {
 	// Get artifact from buildNum
 	u := expansions.ExpandURL(artifactsURL)
 	verboseln("Artifact list:", censorURL(u))
-	resBody := httpGet(u, circleToken)
+	resBody, err := httpGet(u, circleToken)
+	if err != nil {
+		log.Fatalf("Error reading response body: %s", err)
+
+	}
 	var items map[string][]artifact
 	if err := json.Unmarshal(resBody, &items); err != nil {
 		log.Fatal(err)
@@ -282,8 +286,11 @@ func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 	u := expansions.ExpandURL(buildListURL)
 	verboseln("Build list:", censorURL(u))
 
-	resBody := httpGet(u, circleToken)
+	resBody, err := httpGet(u, circleToken)
+	if err != nil {
+		log.Fatalf("Error reading response body: %s", err)
 
+	}
 	var builds []build
 	if err := json.Unmarshal(resBody, &builds); err != nil {
 		log.Fatal(err)
@@ -395,8 +402,11 @@ func downloadArtifact(artifacts []artifact, name, outputPath, circleToken string
 		}
 		fmt.Printf("Downloading %s...\n", name)
 
-		resBody := httpGet(u.String(), circleToken)
+		resBody, err := httpGet(u.String(), circleToken)
+		if err != nil {
+			log.Fatalf("Error reading response body: %s", err)
 
+		}
 		f, err := os.Create(outputPath)
 		if err != nil {
 			return 0, err
@@ -468,7 +478,7 @@ func mutateURL(original string, mutate bool) string {
 	return safe.String()
 }
 
-func httpGet(url, token string) []byte {
+func httpGet(url, token string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -490,8 +500,8 @@ func httpGet(url, token string) []byte {
 	defer res.Body.Close()
 	body, readErr := io.ReadAll(res.Body)
 	if readErr != nil {
-		log.Fatal(readErr)
+		return nil, readErr
 	}
 
-	return body
+	return body, nil
 }
