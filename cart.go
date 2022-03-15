@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -48,10 +48,6 @@ type build struct {
 	Outcome  string `json:"outcome"`
 	Subject  string `json:"subject"`
 	StopTime string `json:"stop_time"`
-}
-
-type artifactItems struct {
-	Artifacts []artifact `json:"items"`
 }
 
 type artifact struct {
@@ -255,14 +251,12 @@ func main() {
 	// Get artifact from buildNum
 	u := expansions.ExpandURL(artifactsURL)
 	verboseln("Artifact list:", censorURL(u))
-	resBody := httpClient(u, circleToken)
-
-	var items artifactItems
-
+	resBody := httpGet(u, circleToken)
+	var items map[string][]artifact
 	if err := json.Unmarshal(resBody, &items); err != nil {
 		log.Fatal(err)
 	}
-	artifacts := items.Artifacts
+	artifacts := items["items"]
 
 	if flagListArtifacts {
 		for i := range artifacts {
@@ -288,7 +282,7 @@ func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 	u := expansions.ExpandURL(buildListURL)
 	verboseln("Build list:", censorURL(u))
 
-	resBody := httpClient(u, circleToken)
+	resBody := httpGet(u, circleToken)
 
 	var builds []build
 	if err := json.Unmarshal(resBody, &builds); err != nil {
@@ -401,7 +395,7 @@ func downloadArtifact(artifacts []artifact, name, outputPath, circleToken string
 		}
 		fmt.Printf("Downloading %s...\n", name)
 
-		resBody := httpClient(u.String(), circleToken)
+		resBody := httpGet(u.String(), circleToken)
 
 		f, err := os.Create(outputPath)
 		if err != nil {
@@ -474,7 +468,7 @@ func mutateURL(original string, mutate bool) string {
 	return safe.String()
 }
 
-func httpClient(url, token string) []byte {
+func httpGet(url, token string) []byte {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -494,7 +488,7 @@ func httpClient(url, token string) []byte {
 	}
 
 	defer res.Body.Close()
-	body, readErr := ioutil.ReadAll(res.Body)
+	body, readErr := io.ReadAll(res.Body)
 	if readErr != nil {
 		log.Fatal(readErr)
 	}
