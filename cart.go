@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -289,13 +290,13 @@ func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 
 	res := httpGet(u, circleToken)
 	defer res.Body.Close()
-	body, readErr := io.ReadAll(res.Body)
-	if readErr != nil {
-		log.Fatal(readErr)
+	body := new(bytes.Buffer)
+	if _, err := io.Copy(body, res.Body); err != nil {
+		log.Fatal(err)
 	}
 	var builds []build
-	if err := json.Unmarshal(body, &builds); err != nil {
-		log.Fatal(err)
+	if err := json.Unmarshal(body.Bytes(), &builds); err != nil {
+		log.Fatalf("%s: %s", err, body.String())
 	}
 	if len(builds) == 0 {
 		log.Fatalf("no builds found for branch: %s", filter.branch)
@@ -493,12 +494,5 @@ func httpGet(url, token string) *http.Response {
 	if res.StatusCode != http.StatusOK {
 		log.Fatalf("http: remote server responded %s (check http://status.circleci.com)", res.Status)
 	}
-
-	/*defer res.Body.Close()
-	body, readErr := io.ReadAll(res.Body)
-	if readErr != nil {
-		return nil, readErr
-	}*/
-
 	return res
 }
