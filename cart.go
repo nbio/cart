@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	// API v1.1 : <https://circleci.com/docs/api/v1-reference/>
+	// API v2 : <https://circleci.com/docs/api/v2/>
 	// but beware that the summary is missing some method/URL pairs which are
 	// described further down in the page.
 
@@ -405,7 +405,6 @@ func downloadArtifact(artifacts []artifact, name, outputPath, circleToken string
 			os.Exit(0)
 		}
 		fmt.Printf("Downloading %s...\n", name)
-
 		res := httpGet(u.String(), circleToken)
 		defer res.Body.Close()
 		f, err := os.Create(outputPath)
@@ -482,16 +481,13 @@ func httpGet(url, token string) *http.Response {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	req.Header.Set("Circle-Token", token)
 	req.Header.Set("Accept", "application/json")
-
 	client := &http.Client{}
 	res, err := client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	if res.StatusCode != http.StatusOK {
 		log.Fatalf("http: remote server responded %s (check http://status.circleci.com)", res.Status)
 	}
