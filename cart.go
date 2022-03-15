@@ -18,12 +18,12 @@ import (
 )
 
 const (
-	// API v1.1 : <https://circleci.com/docs/api/v1-reference/>
+	// API v2 : <https://circleci.com/docs/api/v2/>
 	// but beware that the summary is missing some method/URL pairs which are
 	// described further down in the page.
 
-	buildListURL = "https://circleci.com/api/v1.1/project/github/${project}/tree/${branch}?limit=${retrieve_count}&filter=successful&circle-token=${circle_token}"
-	artifactsURL = "https://circleci.com/api/v1.1/project/github/${project}/${build_num}/artifacts?circle-token=${circle_token}"
+	buildListURL = "https://circleci.com/api/v2/project/github/${project}/tree/${branch}?limit=${retrieve_count}&filter=successful"
+	artifactsURL = "https://circleci.com/api/v2/project/github/${project}/${build_num}/artifacts"
 
 	// We need to account for multiple workflows, and multiple builds within workflows
 	defaultRetrieveCount = 10
@@ -217,7 +217,6 @@ func main() {
 		"artifact":       artifactName,
 		"retrieve_count": strconv.Itoa(retrieveBuildsCount),
 		"build_num":      strconv.Itoa(buildNum),
-		"circle_token":   circleToken,
 		"branch":         filter.branch,
 		"workflow":       filter.workflow,
 		"jobname":        filter.jobname,
@@ -253,20 +252,18 @@ func main() {
 	// Get artifact from buildNum
 	u := expansions.ExpandURL(artifactsURL)
 	verboseln("Artifact list:", censorURL(u))
-	req, err := http.NewRequest("GET", u, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	}
+	res := httpGet(u, circleToken)
+
 	defer res.Body.Close()
-	var artifacts []artifact
-	if err := json.NewDecoder(res.Body).Decode(&artifacts); err != nil {
+	body := new(bytes.Buffer)
+	if _, err := io.Copy(body, res.Body); err != nil {
 		log.Fatal(err)
 	}
+	var items map[string][]artifact
+	if err := json.Unmarshal(body.Bytes(), &items); err != nil {
+		log.Fatalf("%s: %s", err, body.String())
+	}
+	artifacts := items["items"]
 
 	if flagListArtifacts {
 		for i := range artifacts {
@@ -281,7 +278,7 @@ func main() {
 	if outputPath == "" {
 		outputPath = filepath.Base(artifactName)
 	}
-	n, err := downloadArtifact(artifacts, artifactName, outputPath)
+	n, err := downloadArtifact(artifacts, artifactName, outputPath, circleToken)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -291,21 +288,13 @@ func main() {
 func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 	u := expansions.ExpandURL(buildListURL)
 	verboseln("Build list:", censorURL(u))
-	req, err := http.NewRequest("GET", u, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	}
+
+	res := httpGet(u, circleToken)
 	defer res.Body.Close()
 	body := new(bytes.Buffer)
 	if _, err := io.Copy(body, res.Body); err != nil {
 		log.Fatal(err)
 	}
-
 	var builds []build
 	if err := json.Unmarshal(body.Bytes(), &builds); err != nil {
 		log.Fatalf("%s: %s", err, body.String())
@@ -400,7 +389,7 @@ func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 	return builds[foundBuild].BuildNum
 }
 
-func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, error) {
+func downloadArtifact(artifacts []artifact, name, outputPath, circleToken string) (int64, error) {
 	for _, a := range artifacts {
 		verboseln("Artifact URL:", a.URL)
 		if !strings.HasSuffix(a.URL, name) {
@@ -410,23 +399,14 @@ func downloadArtifact(artifacts []artifact, name, outputPath string) (int64, err
 		if err != nil {
 			return 0, err
 		}
-		q := u.Query()
-		q.Add("circle-token", circleToken)
-		u.RawQuery = q.Encode()
 		verboseln("Artifact found:", name)
 		if dryRun {
 			fmt.Println("Dry run: skipped download")
 			os.Exit(0)
 		}
 		fmt.Printf("Downloading %s...\n", name)
-		res, err := http.Get(u.String())
-		if err != nil {
-			return 0, err
-		}
+		res := httpGet(u.String(), circleToken)
 		defer res.Body.Close()
-		if res.StatusCode != 200 {
-			return 0, fmt.Errorf("http: remote server responded %s (check http://status.circleci.com)", res.Status)
-		}
 		f, err := os.Create(outputPath)
 		if err != nil {
 			return 0, err
@@ -494,4 +474,22 @@ func mutateURL(original string, mutate bool) string {
 	}
 
 	return safe.String()
+}
+
+func httpGet(url, token string) *http.Response {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	req.Header.Set("Circle-Token", token)
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK {
+		log.Fatalf("http: remote server responded %s (check http://status.circleci.com)", res.Status)
+	}
+	return res
 }
