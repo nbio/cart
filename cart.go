@@ -251,13 +251,14 @@ func main() {
 	// Get artifact from buildNum
 	u := expansions.ExpandURL(artifactsURL)
 	verboseln("Artifact list:", censorURL(u))
-	resBody, err := httpGet(u, circleToken)
-	if err != nil {
-		log.Fatalf("Error reading response body: %s", err)
-
+	res := httpGet(u, circleToken)
+	defer res.Body.Close()
+	body, readErr := io.ReadAll(res.Body)
+	if readErr != nil {
+		log.Fatal(readErr)
 	}
 	var items map[string][]artifact
-	if err := json.Unmarshal(resBody, &items); err != nil {
+	if err := json.Unmarshal(body, &items); err != nil {
 		log.Fatal(err)
 	}
 	artifacts := items["items"]
@@ -286,13 +287,14 @@ func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 	u := expansions.ExpandURL(buildListURL)
 	verboseln("Build list:", censorURL(u))
 
-	resBody, err := httpGet(u, circleToken)
-	if err != nil {
-		log.Fatalf("Error reading response body: %s", err)
-
+	res := httpGet(u, circleToken)
+	defer res.Body.Close()
+	body, readErr := io.ReadAll(res.Body)
+	if readErr != nil {
+		log.Fatal(readErr)
 	}
 	var builds []build
-	if err := json.Unmarshal(resBody, &builds); err != nil {
+	if err := json.Unmarshal(body, &builds); err != nil {
 		log.Fatal(err)
 	}
 	if len(builds) == 0 {
@@ -385,7 +387,7 @@ func circleFindBuild(expansions Expander, filter FilterSet) (buildNum int) {
 	return builds[foundBuild].BuildNum
 }
 
-func downloadArtifact(artifacts []artifact, name, outputPath, circleToken string) (int, error) {
+func downloadArtifact(artifacts []artifact, name, outputPath, circleToken string) (int64, error) {
 	for _, a := range artifacts {
 		verboseln("Artifact URL:", a.URL)
 		if !strings.HasSuffix(a.URL, name) {
@@ -402,18 +404,13 @@ func downloadArtifact(artifacts []artifact, name, outputPath, circleToken string
 		}
 		fmt.Printf("Downloading %s...\n", name)
 
-		resBody, err := httpGet(u.String(), circleToken)
-		if err != nil {
-			log.Fatalf("Error reading response body: %s", err)
-
-		}
+		res := httpGet(u.String(), circleToken)
+		defer res.Body.Close()
 		f, err := os.Create(outputPath)
 		if err != nil {
 			return 0, err
 		}
-		defer f.Close()
-
-		return f.Write(resBody)
+		return io.Copy(f, res.Body)
 	}
 	return 0, fmt.Errorf("unable to find artifact: %s", name)
 }
@@ -478,7 +475,7 @@ func mutateURL(original string, mutate bool) string {
 	return safe.String()
 }
 
-func httpGet(url, token string) ([]byte, error) {
+func httpGet(url, token string) *http.Response {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -497,11 +494,11 @@ func httpGet(url, token string) ([]byte, error) {
 		log.Fatalf("http: remote server responded %s (check http://status.circleci.com)", res.Status)
 	}
 
-	defer res.Body.Close()
+	/*defer res.Body.Close()
 	body, readErr := io.ReadAll(res.Body)
 	if readErr != nil {
 		return nil, readErr
-	}
+	}*/
 
-	return body, nil
+	return res
 }
